@@ -114,7 +114,7 @@ class PaliGemmaWithExpertModel(nn.Module):
         elif inputs_embeds[0] is None:
             suffix_output = self.gemma_expert.model.forward(
                 inputs_embeds=inputs_embeds[1],
-                attention_mask=attention_mask,
+                attention_mask=attention_mask.to(dtype=inputs_embeds[1].dtype) if attention_mask is not None else None,
                 position_ids=position_ids,
                 past_key_values=past_key_values,
                 use_cache=use_cache,
