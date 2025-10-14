@@ -17,7 +17,7 @@ import orbax.checkpoint as ocp
 import safetensors
 import torch
 
-from openpi.models_pytorch import pi0_pytorch
+from openpi.models_pytorch import pi0_pytorch, pin1_pytorch
 from openpi.shared import image_tools
 import openpi.shared.array_typing as at
 
@@ -113,14 +113,15 @@ class Observation(Generic[ArrayT]):
         if ("tokenized_prompt" in data) != ("tokenized_prompt_mask" in data):
             raise ValueError("tokenized_prompt and tokenized_prompt_mask must be provided together.")
         # If images are uint8, convert them to [-1, 1] float32.
+        data["image"] = {} if "image" not in data else data["image"]
         for key in data["image"]:
             if data["image"][key].dtype == np.uint8:
                 data["image"][key] = data["image"][key].astype(np.float32) / 255.0 * 2.0 - 1.0
             elif hasattr(data["image"][key], "dtype") and data["image"][key].dtype == torch.uint8:
                 data["image"][key] = data["image"][key].to(torch.float32).permute(0, 3, 1, 2) / 255.0 * 2.0 - 1.0
         return cls(
-            images=data["image"],
-            image_masks=data["image_mask"],
+            images=data["image"] if "image" in data else {},
+            image_masks=data["image_mask"] if "image_mask" in data else {},
             state=data["state"],
             tokenized_prompt=data.get("tokenized_prompt"),
             tokenized_prompt_mask=data.get("tokenized_prompt_mask"),
@@ -242,7 +243,8 @@ class BaseModelConfig(abc.ABC):
 
     def load_pytorch(self, train_config, weight_path: str):
         logger.info(f"train_config: {train_config}")
-        model = pi0_pytorch.PI0Pytorch(config=train_config.model)
+        # import pdb; pdb.set_trace()
+        model = pin1_pytorch.PIn1Pytorch(config=train_config.model)
         safetensors.torch.load_model(model, weight_path)
         return model
 

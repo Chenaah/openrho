@@ -315,7 +315,8 @@ class PIn1Pytorch(nn.Module):
 
     def forward(self, observation, actions, noise=None, time=None) -> Tensor:
         """Do a full training forward pass and compute the loss (batch_size x num_steps x num_motors)"""
-        images, img_masks, lang_tokens, lang_masks, state = self._preprocess_observation(observation, train=True)
+        # images, img_masks, lang_tokens, lang_masks, state = self._preprocess_observation(observation, train=True)
+        state = observation.state
         # import pdb; pdb.set_trace() # [2, 32, 32]
 
         if noise is None:
@@ -384,23 +385,23 @@ class PIn1Pytorch(nn.Module):
             actions_shape = (bsize, self.config.action_horizon, self.config.action_dim)
             noise = self.sample_noise(actions_shape, device)
 
-        images, img_masks, lang_tokens, lang_masks, state = self._preprocess_observation(observation, train=False)
-
-        prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(images, img_masks, lang_tokens, lang_masks)
-        prefix_att_2d_masks = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
-        prefix_position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
+        # images, img_masks, lang_tokens, lang_masks, state = self._preprocess_observation(observation, train=False)
+        state = observation.state
+        # prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(images, img_masks, lang_tokens, lang_masks)
+        # prefix_att_2d_masks = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
+        # prefix_position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
 
         # Compute image and language key value cache
-        prefix_att_2d_masks_4d = self._prepare_attention_masks_4d(prefix_att_2d_masks)
+        # prefix_att_2d_masks_4d = self._prepare_attention_masks_4d(prefix_att_2d_masks)
         self.paligemma_with_expert.paligemma.language_model.config._attn_implementation = "eager"  # noqa: SLF001
 
-        _, past_key_values = self.paligemma_with_expert.forward(
-            attention_mask=prefix_att_2d_masks_4d,
-            position_ids=prefix_position_ids,
-            past_key_values=None,
-            inputs_embeds=[prefix_embs, None],
-            use_cache=True,
-        )
+        # _, prefix_past_key_values = self.paligemma_with_expert.forward(
+        #     attention_mask=prefix_att_2d_masks_4d,
+        #     position_ids=prefix_position_ids,
+        #     past_key_values=None,
+        #     inputs_embeds=[prefix_embs, None],
+        #     use_cache=True,
+        # )
 
         dt = -1.0 / num_steps
         dt = torch.tensor(dt, dtype=torch.float32, device=device)
@@ -411,8 +412,8 @@ class PIn1Pytorch(nn.Module):
             expanded_time = time.expand(bsize)
             v_t = self.denoise_step(
                 state,
-                prefix_pad_masks,
-                past_key_values,
+                None,
+                None,
                 x_t,
                 expanded_time,
             )
@@ -420,6 +421,7 @@ class PIn1Pytorch(nn.Module):
             # Euler step - use new tensor assignment instead of in-place operation
             x_t = x_t + dt * v_t
             time += dt
+        print("x_t:", x_t.shape)  # [1, 50, 32]
         return x_t
 
     def denoise_step(
@@ -434,17 +436,17 @@ class PIn1Pytorch(nn.Module):
         suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond = self.embed_suffix(state, x_t, timestep)
 
         suffix_len = suffix_pad_masks.shape[1]
-        batch_size = prefix_pad_masks.shape[0]
-        prefix_len = prefix_pad_masks.shape[1]
+        batch_size = suffix_pad_masks.shape[0]
+        # prefix_len = prefix_pad_masks.shape[1]
 
-        prefix_pad_2d_masks = prefix_pad_masks[:, None, :].expand(batch_size, suffix_len, prefix_len)
+        # prefix_pad_2d_masks = prefix_pad_masks[:, None, :].expand(batch_size, suffix_len, prefix_len)
 
         suffix_att_2d_masks = make_att_2d_masks(suffix_pad_masks, suffix_att_masks)
 
-        full_att_2d_masks = torch.cat([prefix_pad_2d_masks, suffix_att_2d_masks], dim=2)
+        full_att_2d_masks = suffix_att_2d_masks
 
-        prefix_offsets = torch.sum(prefix_pad_masks, dim=-1)[:, None]
-        position_ids = prefix_offsets + torch.cumsum(suffix_pad_masks, dim=1) - 1
+        # prefix_offsets = torch.sum(prefix_pad_masks, dim=-1)[:, None]
+        position_ids = torch.cumsum(suffix_pad_masks, dim=1) - 1
 
         # Prepare attention masks
         full_att_2d_masks_4d = self._prepare_attention_masks_4d(full_att_2d_masks)
@@ -453,7 +455,7 @@ class PIn1Pytorch(nn.Module):
         outputs_embeds, _ = self.paligemma_with_expert.forward(
             attention_mask=full_att_2d_masks_4d,
             position_ids=position_ids,
-            past_key_values=past_key_values,
+            past_key_values=None,
             inputs_embeds=[None, suffix_embs],
             use_cache=False,
             adarms_cond=[None, adarms_cond],

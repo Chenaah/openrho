@@ -22,6 +22,7 @@ def create_trained_policy(
     default_prompt: str | None = None,
     norm_stats: dict[str, transforms.NormStats] | None = None,
     pytorch_device: str | None = None,
+    skip_normalization: bool = False,
 ) -> _policy.Policy:
     """Create a policy from a trained checkpoint.
 
@@ -72,23 +73,45 @@ def create_trained_policy(
         except ImportError:
             pytorch_device = "cpu"
 
-    return _policy.Policy(
-        model,
-        transforms=[
-            *repack_transforms.inputs,
-            transforms.InjectDefaultPrompt(default_prompt),
-            *data_config.data_transforms.inputs,
-            transforms.Normalize(norm_stats, use_quantiles=data_config.use_quantile_norm),
-            *data_config.model_transforms.inputs,
-        ],
-        output_transforms=[
-            *data_config.model_transforms.outputs,
-            transforms.Unnormalize(norm_stats, use_quantiles=data_config.use_quantile_norm),
-            *data_config.data_transforms.outputs,
-            *repack_transforms.outputs,
-        ],
-        sample_kwargs=sample_kwargs,
-        metadata=train_config.policy_metadata,
-        is_pytorch=is_pytorch,
-        pytorch_device=pytorch_device if is_pytorch else None,
-    )
+    if skip_normalization:
+        return _policy.Policy(
+            model,
+            transforms=[
+                *repack_transforms.inputs,
+                transforms.InjectDefaultPrompt(default_prompt),
+                *data_config.data_transforms.inputs,
+                # transforms.Normalize(norm_stats, use_quantiles=data_config.use_quantile_norm),
+                *data_config.model_transforms.inputs,
+            ],
+            output_transforms=[
+                *data_config.model_transforms.outputs,
+                # transforms.Unnormalize(norm_stats, use_quantiles=data_config.use_quantile_norm),
+                *data_config.data_transforms.outputs,
+                *repack_transforms.outputs,
+            ],
+            sample_kwargs=sample_kwargs,
+            metadata=train_config.policy_metadata,
+            is_pytorch=is_pytorch,
+            pytorch_device=pytorch_device if is_pytorch else None,
+        )
+    else:
+        return _policy.Policy(
+            model,
+            transforms=[
+                *repack_transforms.inputs,
+                transforms.InjectDefaultPrompt(default_prompt),
+                *data_config.data_transforms.inputs,
+                transforms.Normalize(norm_stats, use_quantiles=data_config.use_quantile_norm),
+                *data_config.model_transforms.inputs,
+            ],
+            output_transforms=[
+                *data_config.model_transforms.outputs,
+                transforms.Unnormalize(norm_stats, use_quantiles=data_config.use_quantile_norm),
+                *data_config.data_transforms.outputs,
+                *repack_transforms.outputs,
+            ],
+            sample_kwargs=sample_kwargs,
+            metadata=train_config.policy_metadata,
+            is_pytorch=is_pytorch,
+            pytorch_device=pytorch_device if is_pytorch else None,
+        )

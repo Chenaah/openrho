@@ -129,6 +129,56 @@ def build_datasets(config: _config.TrainConfig):
     return data_loader, data_loader.data_config()
 
 
+class FakeDataLoader:
+    """Create a fake data loader for testing that produces random data.
+    
+    This class creates an iterable that can be reused multiple times (unlike a generator).
+    It's designed to work with DDP and the outer while loop in the training script.
+    
+    Args:
+        num_batches: Number of batches per epoch
+        batch_size: Batch size for each sample
+    """
+    
+    class FakeObservation:
+        def __init__(self, state):
+            self.state = state
+        def to(self, device):
+            self.state = self.state.to(device)
+            return self
+    
+    def __init__(self, num_batches=1000, batch_size=128):
+        self.num_batches = num_batches
+        self.batch_size = batch_size
+        self.epoch = 0
+    
+    def set_epoch(self, epoch):
+        """Set the epoch for the data loader (for DDP compatibility)."""
+        self.epoch = epoch
+    
+    def __len__(self):
+        return self.num_batches
+    
+    def __iter__(self):
+        """Return an iterator that generates fake data."""
+        for i in range(self.num_batches):
+            # Create random observation with state shape (batch_size, 32)
+            # Use epoch and iteration for deterministic randomness across processes
+            seed = self.epoch * self.num_batches + i
+            generator = torch.Generator()
+            generator.manual_seed(seed)
+            
+            state = torch.zeros(self.batch_size, 32, dtype=torch.float32)
+            state[:, :8] = torch.randn(self.batch_size, 8, dtype=torch.float32, generator=generator)
+            observation = self.FakeObservation(state)
+            
+            # Create random actions with shape (batch_size, 50, 32)
+            actions = torch.zeros(self.batch_size, 50, 32, dtype=torch.float32)
+            actions[:, :, :7] = (state[:, None, :7] * 2).repeat(1, 50, 1)  # Simple relation for testing
+                
+            yield observation, actions
+
+
 def get_model_state_dict(model):
     """Get state dict from model, handling DDP wrapper."""
     return (
@@ -358,6 +408,9 @@ def train_loop(config: _config.TrainConfig):
 
     # Pass the original batch size to data loader - it will handle DDP splitting internally
     loader, data_config = build_datasets(config)
+    # For testing, use fake data loader
+    loader = FakeDataLoader(num_batches=1000, batch_size=config.batch_size)
+    # data_config = None  # or create a mock data_config if needed
 
     # Log sample images to wandb on first batch
     # if is_main and config.wandb_enabled and not resuming:
@@ -518,7 +571,7 @@ def train_loop(config: _config.TrainConfig):
             # Observation.state: (16, 32), torch.float64
             # (Batch_size, state_dim (padded))
 
-            pdb.set_trace()
+            # pdb.set_trace()
             
             # Check if we've reached the target number of steps
             if global_step >= config.num_train_steps:
