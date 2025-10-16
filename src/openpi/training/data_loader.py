@@ -127,6 +127,63 @@ class FakeDataset(Dataset):
         return self._num_samples
 
 
+
+class LegDataset(Dataset):
+    def __init__(self, model_config: _model.BaseModelConfig, num_samples: int):
+        self._num_samples = num_samples
+        self._observation_spec, self._action_spec = model_config.inputs_spec()
+
+    def __getitem__(self, index: SupportsIndex) -> dict:
+        rng = jax.random.key(index.__index__())
+
+        def make_from_spec(spec: jax.ShapeDtypeStruct):
+            nonlocal rng
+            rng, data_rng = jax.random.split(rng)
+            # Remove the batch dimension.
+            shape = spec.shape[1:]
+            if spec.dtype == jnp.float32:
+                return jax.random.uniform(data_rng, shape=shape, minval=-1.0, maxval=1.0)
+            if spec.dtype == jnp.int32:
+                return jax.random.randint(data_rng, shape=shape, minval=0, maxval=2048)
+            return jnp.zeros(shape=shape, dtype=spec.dtype)
+
+        observation = jax.tree.map(make_from_spec, self._observation_spec)
+        
+        # Get observation dict and extract a vector for action generation
+        obs_dict = observation.to_dict()
+        
+        obs_vector = obs_dict["state"]
+        
+        # Make every 5 dimensions repeat the same values
+        # Generate only 5 unique values, then tile them to fill the state space
+        # For state_dim=40: [v0, v1, v2, v3, v4, v0, v1, v2, v3, v4, v0, v1, ...]
+        unique_values = obs_vector[:5]  # Take first 5 dimensions as the unique values
+        num_repeats = len(obs_vector) // 5
+        obs_vector_repeated = jnp.tile(unique_values, num_repeats)
+        
+        # Update the state in obs_dict with the repeated pattern
+        obs_dict["state"] = obs_vector_repeated
+        
+        # Generate action: 2 * obs[:5], repeated for shape (10, 5)
+        # Take first 5 dimensions, multiply by 2
+        action_single = unique_values * 2.0
+        # Repeat across action_horizon (10 timesteps) to get shape (10, 5)
+        action = jnp.tile(action_single, (10, 1))
+
+        # print("unique_values (state[:5]):", unique_values)
+        # print("obs_vector_repeated[:10]:", obs_vector_repeated[:10])
+        # print("action_single (2 * obs[:5]):", action_single)
+        # print("action shape:", action.shape)
+
+        return {
+            **obs_dict,
+            "actions": action,
+        }
+
+    def __len__(self) -> int:
+        return self._num_samples
+
+
 def create_torch_dataset(
     data_config: _config.DataConfig, action_horizon: int, model_config: _model.BaseModelConfig
 ) -> Dataset:
@@ -136,6 +193,8 @@ def create_torch_dataset(
         raise ValueError("Repo ID is not set. Cannot create dataset.")
     if repo_id == "fake":
         return FakeDataset(model_config, num_samples=1024)
+    elif repo_id == "fake233":
+        return LegDataset(model_config, num_samples=2048)
 
     dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id)
     dataset = lerobot_dataset.LeRobotDataset(

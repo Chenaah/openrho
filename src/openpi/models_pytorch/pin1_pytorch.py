@@ -97,16 +97,12 @@ class PIn1Pytorch(nn.Module):
             precision=config.dtype,
         )
 
-        self.action_in_proj = nn.Linear(32, action_expert_config.width)
-        self.action_out_proj = nn.Linear(action_expert_config.width, 32)
+        self.action_in_proj = nn.Linear(5, action_expert_config.width)
+        self.action_out_proj = nn.Linear(action_expert_config.width, 5)
 
-        if self.pi05:
-            self.time_mlp_in = nn.Linear(action_expert_config.width, action_expert_config.width)
-            self.time_mlp_out = nn.Linear(action_expert_config.width, action_expert_config.width)
-        else:
-            self.state_proj = nn.Linear(32, action_expert_config.width)
-            self.action_time_mlp_in = nn.Linear(2 * action_expert_config.width, action_expert_config.width)
-            self.action_time_mlp_out = nn.Linear(action_expert_config.width, action_expert_config.width)
+        self.state_proj = nn.Linear(40, action_expert_config.width)
+        self.action_time_mlp_in = nn.Linear(2 * action_expert_config.width, action_expert_config.width)
+        self.action_time_mlp_out = nn.Linear(action_expert_config.width, action_expert_config.width)
 
         torch.set_float32_matmul_precision("high")
         self.sample_actions = torch.compile(self.sample_actions, mode="max-autotune")

@@ -12,27 +12,36 @@ from openpi.shared import download
 from openpi.training import config as _config
 from openpi.training import data_loader as _data_loader
 
-def make_droid_example() -> dict:
-    """Creates a random input example for the Droid policy."""
+def make_toy_example() -> dict:
+    """Creates a random input example matching the LegDataset pattern.
+    
+    Generates a state with repeating pattern every 5 dimensions:
+    state[0] = state[5] = state[10] = ... = state[35]
+    state[1] = state[6] = state[11] = ... = state[36]
+    etc.
+    """
+    # Generate 5 unique random values
+    unique_values = np.random.rand(5)
+    # Tile them to create the repeating pattern for 40 dimensions
+    state = np.tile(unique_values, 8)  # 5 * 8 = 40
     return {
-        "observation/image": np.random.randint(256, size=(224, 224, 3), dtype=np.uint8),
-        "observation/wrist_image": np.random.randint(256, size=(224, 224, 3), dtype=np.uint8),
-        "observation/state": np.random.rand(8),
-        "prompt": "do something",
+        "state": state,
     }
 
 
 config = _config.get_config("pin1_fake")
-checkpoint_dir = "/home/zmb8634/Lab/openpi/checkpoints/pi0_libero/my_experiment/30000"
+# checkpoint_dir = "/home/zmb8634/Lab/openpi/checkpoints/pi0_libero/my_experiment/30000"
+checkpoint_dir = "/home/zmb8634/Lab/openpi/checkpoints/pin1_fake/good_luck/30000"
 
 # Create a trained policy.
-policy = _policy_config.create_trained_policy(config, checkpoint_dir, skip_normalization=True)
+# policy = _policy_config.create_trained_policy(config, checkpoint_dir, skip_normalization=True)
+policy = _policy_config.create_trained_policy(config, checkpoint_dir)
 
 # Run inference on a dummy example. This example corresponds to observations produced by the DROID runtime.
 for _ in range(10):
     t0 = time.time()
-    example = make_droid_example()
-    print("State: ", example["observation/state"])
+    example = make_toy_example()
+    print("State: ", example["state"])
     result = policy.infer(example)
     print("Action: ", result["actions"][0])
     t1 = time.time()
@@ -42,5 +51,3 @@ for _ in range(10):
 del policy
 
 print("Actions shape:", result["actions"].shape)
-
-1.6894e+00,  1.5022e+00,  1.3170e+00,  ...,  6.4476e-03

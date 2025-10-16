@@ -87,12 +87,12 @@ class Observation(Generic[ArrayT]):
     that should be produced by the data transforms.
     """
 
-    # Images, in [-1, 1] float32.
-    images: dict[str, at.Float[ArrayT, "*b h w c"]]
-    # Image masks, with same keys as images.
-    image_masks: dict[str, at.Bool[ArrayT, "*b"]]
     # Low-dimensional robot state.
     state: at.Float[ArrayT, "*b s"]
+    # Images, in [-1, 1] float32.
+    images: dict[str, at.Float[ArrayT, "*b h w c"]] | None = None
+    # Image masks, with same keys as images.
+    image_masks: dict[str, at.Bool[ArrayT, "*b"]] | None = None
 
     # Tokenized prompt.
     tokenized_prompt: at.Int[ArrayT, "*b l"] | None = None
@@ -113,7 +113,7 @@ class Observation(Generic[ArrayT]):
         if ("tokenized_prompt" in data) != ("tokenized_prompt_mask" in data):
             raise ValueError("tokenized_prompt and tokenized_prompt_mask must be provided together.")
         # If images are uint8, convert them to [-1, 1] float32.
-        data["image"] = {} if "image" not in data else data["image"]
+        data["image"] = {} if "image" not in data or data["image"] is None else data["image"]
         for key in data["image"]:
             if data["image"][key].dtype == np.uint8:
                 data["image"][key] = data["image"][key].astype(np.float32) / 255.0 * 2.0 - 1.0
