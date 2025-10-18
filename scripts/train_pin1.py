@@ -444,16 +444,16 @@ def train_loop(config: _config.TrainConfig):
     #     logging.info("Cleared sample batch and data loader from memory")
 
     # Build model
-    if not isinstance(config.model, openpi.models.pi0_config.Pi0Config):
-        # Convert dataclass to Pi0Config if needed
-        model_cfg = openpi.models.pi0_config.Pi0Config(
+    if not isinstance(config.model, openpi.models.pi0_config.Pin1Config):
+        # Convert dataclass to Pin1Config if needed
+        model_cfg = openpi.models.pi0_config.Pin1Config(
             dtype=config.pytorch_training_precision,
             action_dim=config.model.action_dim,
             action_horizon=config.model.action_horizon,
             max_token_len=config.model.max_token_len,
             paligemma_variant=getattr(config.model, "paligemma_variant", "gemma_2b"),
             action_expert_variant=getattr(config.model, "action_expert_variant", "gemma_300m"),
-            pi05=getattr(config.model, "pi05", False),
+            pi05=False,
         )
     else:
         model_cfg = config.model

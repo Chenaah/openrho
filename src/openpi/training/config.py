@@ -95,6 +95,8 @@ class DataConfig:
     action_space: droid_rlds_dataset.DroidActionSpace | None = None
     # Path to the data filter file for DROID dataset
     filter_dict_path: str | None = None
+    # Path to the tfrecord directory (used for custom datasets)
+    tfrecord_dir: str | None = None
 
 
 class GroupFactory(Protocol):
@@ -363,6 +365,7 @@ class LegDataConfig(DataConfigFactory):
     """
 
     extra_delta_transform: bool = False
+    tfrecord_dir: str | None = None
 
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
@@ -380,6 +383,7 @@ class LegDataConfig(DataConfigFactory):
             self.create_base_config(assets_dirs, model_config),
             repack_transforms=repack_transform,
             data_transforms=data_transforms,
+            tfrecord_dir=self.tfrecord_dir,
             # model_transforms=model_transforms,
         )
 
@@ -711,7 +715,8 @@ _CONFIGS = [
         # dataset. For your own dataset, you can change the repo_id to point to your dataset.
         # Also modify the DataConfig to use the new config you made for your dataset above.
         data=LegDataConfig(
-            repo_id="fake233",
+            repo_id="quadruped",
+            tfrecord_dir="assets/pin1_fake/quadruped",
             base_config=DataConfig(
                 # This flag determines whether we load the prompt (i.e. the task instruction) from the
                 # ``task`` field in the LeRobot dataset. If set to True, the prompt will show up in

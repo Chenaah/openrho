@@ -20,10 +20,11 @@ def make_toy_example() -> dict:
     state[1] = state[6] = state[11] = ... = state[36]
     etc.
     """
-    # Generate 5 unique random values
-    unique_values = np.random.rand(5)
-    # Tile them to create the repeating pattern for 40 dimensions
-    state = np.tile(unique_values, 8)  # 5 * 8 = 40
+    # Generate 8 unique random values
+    unique_values = np.random.rand(8)
+    # Tile them to create the repeating pattern for shape (10,5,8)
+    state = np.tile(unique_values, (10, 5, 1))
+
     return {
         "state": state,
     }
@@ -31,7 +32,7 @@ def make_toy_example() -> dict:
 
 config = _config.get_config("pin1_fake")
 # checkpoint_dir = "/home/zmb8634/Lab/openpi/checkpoints/pi0_libero/my_experiment/30000"
-checkpoint_dir = "/home/zmb8634/Lab/openpi/checkpoints/pin1_fake/good_luck/30000"
+checkpoint_dir = "/home/zmb8634/Lab/openpi/checkpoints/pin1_fake/good_luck/15000"
 
 # Create a trained policy.
 # policy = _policy_config.create_trained_policy(config, checkpoint_dir, skip_normalization=True)

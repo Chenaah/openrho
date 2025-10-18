@@ -97,10 +97,12 @@ class PIn1Pytorch(nn.Module):
             precision=config.dtype,
         )
 
-        self.action_in_proj = nn.Linear(5, action_expert_config.width)
-        self.action_out_proj = nn.Linear(action_expert_config.width, 5)
+        action_dim = config.action_dim
+        self.action_in_proj = nn.Linear(action_dim, action_expert_config.width)
+        self.action_out_proj = nn.Linear(action_expert_config.width, action_dim)
 
-        self.state_proj = nn.Linear(40, action_expert_config.width)
+        state_dim = config.state_dim
+        self.state_proj = nn.Linear(state_dim, action_expert_config.width)
         self.action_time_mlp_in = nn.Linear(2 * action_expert_config.width, action_expert_config.width)
         self.action_time_mlp_out = nn.Linear(action_expert_config.width, action_expert_config.width)
 
@@ -236,25 +238,26 @@ class PIn1Pytorch(nn.Module):
         pad_masks = []
         att_masks = []
 
-        if not self.pi05:
-            if self.state_proj.weight.dtype == torch.float32:
-                state = state.to(torch.float32)
+        if self.state_proj.weight.dtype == torch.float32:
+            state = state.to(torch.float32)
 
-            # Embed state
-            def state_proj_func(state):
-                return self.state_proj(state)
+        # Embed state
+        def state_proj_func(state):
+            return self.state_proj(state)
 
-            state_emb = self._apply_checkpoint(state_proj_func, state)
+        state_emb = self._apply_checkpoint(state_proj_func, state) # [128, 10, 5, 1024]
 
-            embs.append(state_emb[:, None, :])
-            bsize = state_emb.shape[0]
-            device = state_emb.device
+        # import pdb; pdb.set_trace() 
+        n_total_state_tokens = state_emb.shape[1] * state_emb.shape[2]
+        embs.append(state_emb.view(state_emb.shape[0], n_total_state_tokens, state_emb.shape[3]))
+        bsize = state_emb.shape[0]
+        device = state_emb.device
 
-            state_mask = torch.ones(bsize, 1, dtype=torch.bool, device=device)
-            pad_masks.append(state_mask)
+        state_mask = torch.ones(bsize, n_total_state_tokens, dtype=torch.bool, device=device)
+        pad_masks.append(state_mask)
 
-            # Set attention masks so that image and language inputs do not attend to state or actions
-            att_masks += [1]
+        # Set attention masks so that image and language inputs do not attend to state or actions
+        att_masks += [1]*n_total_state_tokens
 
         # Embed timestep using sine-cosine positional encoding with sensitivity in the range [0, 1]
         time_emb = create_sinusoidal_pos_embedding(

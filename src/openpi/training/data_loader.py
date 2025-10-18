@@ -9,6 +9,7 @@ import jax
 import jax.numpy as jnp
 import lerobot.common.datasets.lerobot_dataset as lerobot_dataset
 import numpy as np
+import tensorflow as tf
 import torch
 
 import openpi.models.model as _model
@@ -152,21 +153,18 @@ class LegDataset(Dataset):
         # Get observation dict and extract a vector for action generation
         obs_dict = observation.to_dict()
         
-        obs_vector = obs_dict["state"]
+        obs_vector = obs_dict["state"] # (10, 5, 8)
         
-        # Make every 5 dimensions repeat the same values
-        # Generate only 5 unique values, then tile them to fill the state space
-        # For state_dim=40: [v0, v1, v2, v3, v4, v0, v1, v2, v3, v4, v0, v1, ...]
-        unique_values = obs_vector[:5]  # Take first 5 dimensions as the unique values
-        num_repeats = len(obs_vector) // 5
-        obs_vector_repeated = jnp.tile(unique_values, num_repeats)
-        
+        # Make every 8 dimensions repeat the same values
+        unique_values = obs_vector[0, 0, :]
+        obs_vector_repeated = jnp.tile(unique_values, (10, 5, 1))  # Shape (10, 5, 8)
+
         # Update the state in obs_dict with the repeated pattern
         obs_dict["state"] = obs_vector_repeated
         
         # Generate action: 2 * obs[:5], repeated for shape (10, 5)
         # Take first 5 dimensions, multiply by 2
-        action_single = unique_values * 2.0
+        action_single = unique_values[:5] * 2.0
         # Repeat across action_horizon (10 timesteps) to get shape (10, 5)
         action = jnp.tile(action_single, (10, 1))
 
@@ -184,6 +182,234 @@ class LegDataset(Dataset):
         return self._num_samples
 
 
+class TFRecordLegDataset(Dataset):
+    """Dataset that loads TFRecord files created by leg_data_prepare.py.
+    
+    This version loads all data into memory for fast random access during training.
+    """
+    
+    def __init__(
+        self,
+        tfrecord_dir: str,
+        model_config: _model.BaseModelConfig,
+        obs_window: int = 10,
+        action_window: int = 10,
+        num_modules: int = 5,
+        single_obs_dim: int = 8,
+        preload: bool = True,
+        max_examples: int | None = None,
+    ):
+        """Initialize TFRecord dataset.
+        
+        Args:
+            tfrecord_dir: Directory containing the .tfrecord files
+            model_config: Model configuration for spec validation
+            obs_window: Number of observations in the window (current + past)
+            action_window: Number of actions in the window (current + future)
+            num_modules: Number of modules for observation reshaping
+            single_obs_dim: Dimension of each module's observation
+            preload: If True, load all data into memory (recommended for fast training)
+            max_examples: Maximum number of examples to load (None = load all)
+        """
+        self.tfrecord_dir = tfrecord_dir
+        self.obs_window = obs_window
+        self.action_window = action_window
+        self.num_modules = num_modules
+        self.single_obs_dim = single_obs_dim
+        self.preload = preload
+        self.max_examples = max_examples
+        self._observation_spec, self._action_spec = model_config.inputs_spec()
+        
+        # Find all tfrecord files in the directory
+        import glob
+        self.tfrecord_files = sorted(glob.glob(os.path.join(tfrecord_dir, "*.tfrecord*")))
+        if not self.tfrecord_files:
+            raise ValueError(f"No TFRecord files found in {tfrecord_dir}")
+        
+        logging.info(f"Found {len(self.tfrecord_files)} TFRecord files in {tfrecord_dir}")
+        
+        # Load all data into memory or build index
+        if preload:
+            self._preload_data()
+        else:
+            logging.warning("preload=False is not recommended - will be very slow during training!")
+            self._build_index()
+    
+    def _preload_data(self):
+        """Load all data into memory for fast random access."""
+        logging.info("Preloading TFRecord data into memory...")
+        
+        feature_description = {
+            'observations': tf.io.VarLenFeature(tf.float32),
+            'observations_shape': tf.io.FixedLenFeature([3], tf.int64),
+            'actions': tf.io.VarLenFeature(tf.float32),
+            'actions_shape': tf.io.FixedLenFeature([2], tf.int64),
+        }
+        
+        # First pass: count total examples to pre-allocate arrays
+        logging.info("Counting total examples...")
+        total_examples = 0
+        for tfrecord_file in self.tfrecord_files:
+            compression = "GZIP" if tfrecord_file.endswith(".gz") else ""
+            dataset = tf.data.TFRecordDataset(tfrecord_file, compression_type=compression)
+            count = sum(1 for _ in dataset)
+            total_examples += count
+            logging.info(f"  {os.path.basename(tfrecord_file)}: {count} examples")
+        
+        logging.info(f"Total examples to load: {total_examples}")
+        
+        # Limit if max_examples is set
+        if self.max_examples is not None and total_examples > self.max_examples:
+            logging.warning(f"Limiting dataset to {self.max_examples:,} examples (out of {total_examples:,} total)")
+            total_examples = self.max_examples
+        
+        # Pre-allocate numpy arrays
+        obs_shape = (total_examples, self.obs_window, self.num_modules, self.single_obs_dim)
+        act_shape = (total_examples, self.action_window, 5)  # Assuming act_dim=5
+        
+        logging.info(f"Pre-allocating arrays:")
+        logging.info(f"  Observations: {obs_shape} = {np.prod(obs_shape) * 4 / 1e9:.2f} GB")
+        logging.info(f"  Actions: {act_shape} = {np.prod(act_shape) * 4 / 1e9:.2f} GB")
+        
+        self._observations = np.empty(obs_shape, dtype=np.float32)
+        self._actions = np.empty(act_shape, dtype=np.float32)
+        
+        # Second pass: load data into pre-allocated arrays
+        logging.info("Loading data into arrays...")
+        idx = 0
+        for file_num, tfrecord_file in enumerate(self.tfrecord_files, 1):
+            compression = "GZIP" if tfrecord_file.endswith(".gz") else ""
+            dataset = tf.data.TFRecordDataset(tfrecord_file, compression_type=compression)
+            
+            file_start_idx = idx
+            file_count = 0
+            log_interval = 10000  # Log every 10k examples
+            
+            for i, serialized_example in enumerate(dataset):
+                if i > 0 and i % log_interval == 0:
+                    logging.info(f"    Processing example {i:,} from file {file_num}/{len(self.tfrecord_files)}...")
+                
+                parsed = tf.io.parse_single_example(serialized_example, feature_description)
+                
+                # Reconstruct observations
+                obs_flat = tf.sparse.to_dense(parsed['observations'])
+                obs_shape_parsed = parsed['observations_shape']
+                observations = tf.reshape(obs_flat, obs_shape_parsed).numpy()
+                
+                # Reconstruct actions
+                actions_flat = tf.sparse.to_dense(parsed['actions'])
+                actions_shape_parsed = parsed['actions_shape']
+                actions = tf.reshape(actions_flat, actions_shape_parsed).numpy()
+                
+                # Directly assign to pre-allocated array
+                self._observations[idx] = observations
+                self._actions[idx] = actions
+                
+                idx += 1
+                file_count += 1
+                
+                # Stop if we've reached max_examples
+                if self.max_examples is not None and idx >= self.max_examples:
+                    logging.info(f"    Reached max_examples limit ({self.max_examples:,}), stopping...")
+                    break
+            
+            logging.info(f"  ✓ Loaded {file_count:,} examples from {os.path.basename(tfrecord_file)} (total: {idx:,}/{total_examples:,})")
+            
+            # Stop if we've reached max_examples
+            if self.max_examples is not None and idx >= self.max_examples:
+                break
+        
+        self._total_examples = total_examples
+        logging.info(f"✓ Preloaded {self._total_examples:,} examples into memory")
+        logging.info(f"  Observations shape: {self._observations.shape}")
+        logging.info(f"  Actions shape: {self._actions.shape}")
+        
+        # Estimate memory usage
+        mem_gb = (self._observations.nbytes + self._actions.nbytes) / 1e9
+        logging.info(f"  Memory usage: {mem_gb:.2f} GB")
+    
+    def _build_index(self):
+        """Build an index mapping (slower fallback - not recommended)."""
+        self._file_lengths = []
+        self._cumulative_lengths = [0]
+        
+        for tfrecord_file in self.tfrecord_files:
+            count = sum(1 for _ in tf.data.TFRecordDataset(
+                tfrecord_file,
+                compression_type="GZIP" if tfrecord_file.endswith(".gz") else ""
+            ))
+            self._file_lengths.append(count)
+            self._cumulative_lengths.append(self._cumulative_lengths[-1] + count)
+        
+        self._total_examples = self._cumulative_lengths[-1]
+        logging.info(f"Total examples in dataset: {self._total_examples}")
+    
+    def __getitem__(self, index: SupportsIndex) -> dict:
+        """Get a single example by index."""
+        idx = index.__index__()
+        if idx < 0 or idx >= self._total_examples:
+            raise IndexError(f"Index {idx} out of range [0, {self._total_examples})")
+        
+        if self.preload:
+            # Fast path: direct array indexing
+            observations = jnp.array(self._observations[idx])
+            actions = jnp.array(self._actions[idx])
+        else:
+            # Slow path: read from disk (not recommended)
+            observations, actions = self._read_from_disk(idx)
+        
+        # Build the output dict matching the expected observation spec
+        obs_dict = {"state": observations}
+        
+        return {
+            **obs_dict,
+            "actions": actions,
+        }
+    
+    def _read_from_disk(self, idx: int) -> tuple:
+        """Slow fallback method to read from disk."""
+        # Find which file contains this index
+        file_idx = 0
+        for i, cumsum in enumerate(self._cumulative_lengths[1:]):
+            if idx < cumsum:
+                file_idx = i
+                break
+        
+        local_idx = idx - self._cumulative_lengths[file_idx]
+        
+        # Read the specific record
+        tfrecord_file = self.tfrecord_files[file_idx]
+        compression = "GZIP" if tfrecord_file.endswith(".gz") else ""
+        dataset = tf.data.TFRecordDataset(tfrecord_file, compression_type=compression)
+        
+        feature_description = {
+            'observations': tf.io.VarLenFeature(tf.float32),
+            'observations_shape': tf.io.FixedLenFeature([3], tf.int64),
+            'actions': tf.io.VarLenFeature(tf.float32),
+            'actions_shape': tf.io.FixedLenFeature([2], tf.int64),
+        }
+        
+        # Skip to the desired record
+        record = dataset.skip(local_idx).take(1)
+        for serialized_example in record:
+            parsed = tf.io.parse_single_example(serialized_example, feature_description)
+            
+            obs_flat = tf.sparse.to_dense(parsed['observations'])
+            obs_shape = parsed['observations_shape']
+            observations = tf.reshape(obs_flat, obs_shape).numpy()
+            
+            actions_flat = tf.sparse.to_dense(parsed['actions'])
+            actions_shape = parsed['actions_shape']
+            actions = tf.reshape(actions_flat, actions_shape).numpy()
+            
+            return jnp.array(observations), jnp.array(actions)
+        
+        raise RuntimeError(f"Failed to read record {local_idx} from {tfrecord_file}")
+    
+    def __len__(self) -> int:
+        return self._total_examples
+
+
 def create_torch_dataset(
     data_config: _config.DataConfig, action_horizon: int, model_config: _model.BaseModelConfig
 ) -> Dataset:
@@ -195,6 +421,27 @@ def create_torch_dataset(
         return FakeDataset(model_config, num_samples=1024)
     elif repo_id == "fake233":
         return LegDataset(model_config, num_samples=2048)
+    elif repo_id == "quadruped":
+        # Load TFRecord dataset for quadruped
+        # Assumes tfrecord_dir is set in data_config or uses a default path
+        tfrecord_dir = getattr(data_config, "tfrecord_dir", None)
+        if tfrecord_dir is None:
+            raise ValueError("tfrecord_dir must be set in data_config for quadruped dataset")
+        
+        # Check if we should preload (default: True for fast training)
+        preload = getattr(data_config, "preload_tfrecords", True)
+        max_examples = getattr(data_config, "max_preload_examples", None)
+        
+        return TFRecordLegDataset(
+            tfrecord_dir=tfrecord_dir,
+            model_config=model_config,
+            obs_window=10,
+            action_window=action_horizon,
+            num_modules=5,
+            single_obs_dim=8,
+            preload=preload,
+            max_examples=max_examples,
+        )
 
     dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id)
     dataset = lerobot_dataset.LeRobotDataset(

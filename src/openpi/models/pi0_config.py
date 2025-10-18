@@ -24,7 +24,9 @@ class Pin1Config(_model.BaseModelConfig):
     # Set the model specific defaults.
     action_dim: int = 5
     action_horizon: int = 10
-    state_dim: int = 40
+    state_dim: int = 8
+    state_token_len: int = 5
+    state_horizon: int = 10
     max_token_len: int = None  # type: ignore
     # Pi05 has two differences from Pi0:
     # - the state input is part of the discrete language tokens rather than a continuous input that is part of the suffix
@@ -57,7 +59,7 @@ class Pin1Config(_model.BaseModelConfig):
 
         with at.disable_typechecking():
             observation_spec = _model.Observation(
-                state=jax.ShapeDtypeStruct([batch_size, self.state_dim], jnp.float32),
+                state=jax.ShapeDtypeStruct([batch_size, self.state_horizon, self.state_token_len, self.state_dim], jnp.float32),
             )
         action_spec = jax.ShapeDtypeStruct([batch_size, self.action_horizon, self.action_dim], jnp.float32)
 
